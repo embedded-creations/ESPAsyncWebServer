@@ -108,6 +108,37 @@ class AsyncChunkedResponse: public AsyncAbstractResponse {
     virtual size_t _fillBuffer(uint8_t *buf, size_t maxLen) override;
 };
 
+class cbuf;
+
+class AsyncChunkedStreamResponse: public AsyncAbstractResponse, public Print {
+  private:
+    AwsChunkedStreamFiller _content;
+    cbuf *_cbuf;
+    size_t _filledLength;
+    uint8_t * _buffer;
+    size_t _bufferRemaining;
+    size_t _numCharsToIgnore;
+  protected:
+    bool _repeatStreamMode;
+  public:
+    AsyncChunkedStreamResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr);
+    ~AsyncChunkedStreamResponse();
+    bool _sourceValid() const { return !!(_content); }
+    virtual size_t _fillBuffer(uint8_t *buf, size_t maxLen) override;
+    size_t write(const uint8_t *data, size_t len);
+    size_t write(uint8_t data);
+    int availableForWrite();
+    using Print::write;
+};
+
+class AsyncStreamRepeaterResponse: public AsyncChunkedStreamResponse {
+  public:
+    AsyncStreamRepeaterResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr) :
+    AsyncChunkedStreamResponse(contentType, chunked, callback, bufferSize, templateCallback) {
+      _repeatStreamMode = true;
+    }
+};
+
 class AsyncProgmemResponse: public AsyncAbstractResponse {
   private:
     const uint8_t * _content;
@@ -117,8 +148,6 @@ class AsyncProgmemResponse: public AsyncAbstractResponse {
     bool _sourceValid() const { return true; }
     virtual size_t _fillBuffer(uint8_t *buf, size_t maxLen) override;
 };
-
-class cbuf;
 
 class AsyncResponseStream: public AsyncAbstractResponse, public Print {
   private:

@@ -142,6 +142,7 @@ class AsyncWebHeader {
 typedef enum { RCT_NOT_USED = -1, RCT_DEFAULT = 0, RCT_HTTP, RCT_WS, RCT_EVENT, RCT_MAX } RequestedConnectionType;
 
 typedef std::function<size_t(uint8_t*, size_t, size_t)> AwsResponseFiller;
+typedef std::function<bool(Print*, size_t, bool)> AwsChunkedStreamFiller;
 typedef std::function<String(const String&)> AwsTemplateProcessor;
 
 class AsyncWebServerRequest {
@@ -262,6 +263,8 @@ class AsyncWebServerRequest {
     AsyncWebServerResponse *beginResponse(Stream &stream, const String& contentType, size_t len, AwsTemplateProcessor callback=nullptr);
     AsyncWebServerResponse *beginResponse(const String& contentType, size_t len, AwsResponseFiller callback, AwsTemplateProcessor templateCallback=nullptr);
     AsyncWebServerResponse *beginChunkedResponse(const String& contentType, AwsResponseFiller callback, AwsTemplateProcessor templateCallback=nullptr);
+    AsyncWebServerResponse *beginChunkedStreamResponse(const String& contentType, AwsChunkedStreamFiller callback, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr);
+    AsyncWebServerResponse *beginStreamRepeaterResponse(const String& contentType, AwsChunkedStreamFiller callback, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr);
     AsyncResponseStream *beginResponseStream(const String& contentType, size_t bufferSize=1460);
     AsyncWebServerResponse *beginResponse_P(int code, const String& contentType, const uint8_t * content, size_t len, AwsTemplateProcessor callback=nullptr);
     AsyncWebServerResponse *beginResponse_P(int code, const String& contentType, PGM_P content, AwsTemplateProcessor callback=nullptr);

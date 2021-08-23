@@ -647,6 +647,110 @@ size_t AsyncChunkedResponse::_fillBuffer(uint8_t *data, size_t len){
 }
 
 /*
+ * Chunked Stream Response (and Stream Repeater Response)
+ * */
+
+AsyncChunkedStreamResponse::AsyncChunkedStreamResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, size_t bufferSize, AwsTemplateProcessor processorCallback): AsyncAbstractResponse(processorCallback) {
+  _code = 200;
+  _content = callback;
+  _contentLength = 0;
+  _contentType = contentType;
+  _sendContentLength = false;
+  _chunked = chunked;
+  _filledLength = 0;
+  _numCharsToIgnore = 0;
+  _cbuf = bufferSize ? new cbuf(bufferSize) : nullptr;
+  _repeatStreamMode = false;
+}
+
+AsyncChunkedStreamResponse::~AsyncChunkedStreamResponse(){
+  // there's no more chance to send data, so set the buffer sizes to zero
+  if(_cbuf) delete _cbuf;
+  _bufferRemaining = 0;
+
+  // one last call to the callback to give a chance to wrap things up
+  _content(this, _filledLength, true);
+}
+
+size_t AsyncChunkedStreamResponse::_fillBuffer(uint8_t *data, size_t len){
+  size_t bytesFromCbus = 0;
+
+  // copy cbuf buffer contents from the last _fillBuffer() call to aws buffer first
+  if(_cbuf) {
+    bytesFromCbus = _cbuf->read((char*)data, len);
+    _filledLength += bytesFromCbus;
+    data += bytesFromCbus;
+    len -= bytesFromCbus;
+  }
+
+  // don't use callback until _cbuf is empty
+  if(!len)
+    return bytesFromCbus;
+
+  // ignore everything that was already sent when we're in repeatStreamMode
+  if(_repeatStreamMode)
+    _numCharsToIgnore = _filledLength;
+
+  _buffer = data;
+  _bufferRemaining = len;
+
+  bool callbackFinished = _content(this, _filledLength, false);
+
+  size_t bytesFilled = bytesFromCbus + (len - _bufferRemaining);
+
+  // callback returning false means there's more data to send later, return RESPONSE_TRY_AGAIN if nothing was loaded
+  if(!callbackFinished && !bytesFilled)
+    return RESPONSE_TRY_AGAIN;
+
+  // return number of bytes loaded in the buffer here, and in write()
+  return bytesFilled;
+}
+
+// this must only be called from the AsyncChunkedStreamResponse callback
+size_t AsyncChunkedStreamResponse::write(const uint8_t *data, size_t len){
+  size_t charsIgnored = 0;
+  if(_numCharsToIgnore) {
+    charsIgnored = min(_numCharsToIgnore, len);
+    _numCharsToIgnore -= charsIgnored;
+    data += charsIgnored;
+    len -= charsIgnored;
+    if(!len)
+      return charsIgnored;
+  }
+
+  // copy to aws buffer first
+  size_t bytesToBuffer = min(len, _bufferRemaining);
+  memcpy(_buffer, data, bytesToBuffer);
+  _filledLength += bytesToBuffer;
+  _bufferRemaining -= bytesToBuffer;
+  _buffer += bytesToBuffer;
+  data += bytesToBuffer;
+  len -= bytesToBuffer;
+
+  size_t bytesToCbuf = 0;
+
+  // if there's anything remaining, add to cbuf until full
+  if(_cbuf) {
+    len = min(len, _cbuf->room());
+    bytesToCbuf = _cbuf->write((const char*)data, len);
+  }
+
+  // anything left over after the two buffers are full gets dropped
+  return charsIgnored + bytesToBuffer + bytesToCbuf;
+}
+
+size_t AsyncChunkedStreamResponse::write(uint8_t data){
+  return write(&data, 1);
+}
+
+int AsyncChunkedStreamResponse::availableForWrite() {
+  if(_cbuf)
+    return _bufferRemaining + _cbuf->room();
+  else
+    return _bufferRemaining;
+}
+
+/*
  * Progmem Response
  * */
 
