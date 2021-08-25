@@ -113,6 +113,7 @@ class cbuf;
 class AsyncChunkedStreamResponse: public AsyncAbstractResponse, public Print {
   private:
     AwsChunkedStreamFiller _content;
+    void* _callbackArg;
     cbuf *_cbuf;
     size_t _filledLength;
     uint8_t * _buffer;
@@ -121,7 +122,7 @@ class AsyncChunkedStreamResponse: public AsyncAbstractResponse, public Print {
   protected:
     bool _repeatStreamMode;
   public:
-    AsyncChunkedStreamResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr);
+    AsyncChunkedStreamResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, void * callbackArg=nullptr, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr);
     ~AsyncChunkedStreamResponse();
     bool _sourceValid() const { return !!(_content); }
     virtual size_t _fillBuffer(uint8_t *buf, size_t maxLen) override;
@@ -133,8 +134,8 @@ class AsyncChunkedStreamResponse: public AsyncAbstractResponse, public Print {
 
 class AsyncStreamRepeaterResponse: public AsyncChunkedStreamResponse {
   public:
-    AsyncStreamRepeaterResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr) :
-    AsyncChunkedStreamResponse(contentType, chunked, callback, bufferSize, templateCallback) {
+    AsyncStreamRepeaterResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, void * callbackArg=nullptr, size_t bufferSize=0, AwsTemplateProcessor templateCallback=nullptr) :
+    AsyncChunkedStreamResponse(contentType, chunked, callback, callbackArg, bufferSize, templateCallback) {
       _repeatStreamMode = true;
     }
 };

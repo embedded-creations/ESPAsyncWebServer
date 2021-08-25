@@ -724,12 +724,12 @@ AsyncWebServerResponse * AsyncWebServerRequest::beginChunkedResponse(const Strin
   return new AsyncCallbackResponse(contentType, 0, callback, templateCallback);
 }
 
-AsyncWebServerResponse * AsyncWebServerRequest::beginChunkedStreamResponse(const String& contentType, AwsChunkedStreamFiller callback, size_t bufferSize, AwsTemplateProcessor templateCallback){
-  return new AsyncChunkedStreamResponse(contentType, _version, callback, bufferSize, templateCallback);
+AsyncWebServerResponse * AsyncWebServerRequest::beginChunkedStreamResponse(const String& contentType, AwsChunkedStreamFiller callback, void * callbackArg, size_t bufferSize, AwsTemplateProcessor templateCallback){
+  return new AsyncChunkedStreamResponse(contentType, _version, callback, callbackArg, bufferSize, templateCallback);
 }
 
-AsyncWebServerResponse * AsyncWebServerRequest::beginStreamRepeaterResponse(const String& contentType, AwsChunkedStreamFiller callback, size_t bufferSize, AwsTemplateProcessor templateCallback){
-  return new AsyncStreamRepeaterResponse(contentType, _version, callback, bufferSize, templateCallback);
+AsyncWebServerResponse * AsyncWebServerRequest::beginStreamRepeaterResponse(const String& contentType, AwsChunkedStreamFiller callback, void * callbackArg, size_t bufferSize, AwsTemplateProcessor templateCallback){
+  return new AsyncStreamRepeaterResponse(contentType, _version, callback, callbackArg, bufferSize, templateCallback);
 }
 
 AsyncResponseStream * AsyncWebServerRequest::beginResponseStream(const String& contentType, size_t bufferSize){

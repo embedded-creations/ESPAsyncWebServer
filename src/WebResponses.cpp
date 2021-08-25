@@ -650,9 +650,10 @@ size_t AsyncChunkedResponse::_fillBuffer(uint8_t *data, size_t len){
  * Chunked Stream Response (and Stream Repeater Response)
  * */
 
-AsyncChunkedStreamResponse::AsyncChunkedStreamResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, size_t bufferSize, AwsTemplateProcessor processorCallback): AsyncAbstractResponse(processorCallback) {
+AsyncChunkedStreamResponse::AsyncChunkedStreamResponse(const String& contentType, bool chunked, AwsChunkedStreamFiller callback, void * callbackArg, size_t bufferSize, AwsTemplateProcessor processorCallback): AsyncAbstractResponse(processorCallback) {
   _code = 200;
   _content = callback;
+  _callbackArg = callbackArg;
   _contentLength = 0;
   _contentType = contentType;
   _sendContentLength = false;
@@ -669,7 +670,7 @@ AsyncChunkedStreamResponse::~AsyncChunkedStreamResponse(){
   _bufferRemaining = 0;
 
   // one last call to the callback to give a chance to wrap things up
-  _content(this, _filledLength, true);
+  _content(this, _filledLength, true, _callbackArg);
 }
 
 size_t AsyncChunkedStreamResponse::_fillBuffer(uint8_t *data, size_t len){
@@ -694,7 +695,7 @@ size_t AsyncChunkedStreamResponse::_fillBuffer(uint8_t *data, size_t len){
   _buffer = data;
   _bufferRemaining = len;
 
-  bool callbackFinished = _content(this, _filledLength, false);
+  bool callbackFinished = _content(this, _filledLength, false, _callbackArg);
 
   size_t bytesFilled = bytesFromCbus + (len - _bufferRemaining);
 
