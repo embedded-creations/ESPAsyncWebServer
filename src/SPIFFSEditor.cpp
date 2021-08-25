@@ -1,5 +1,4 @@
 #include "SPIFFSEditor.h"
-#include <FS.h>
 
 #define EDFS
 
@@ -7,117 +6,9 @@
  #include "edit.htm.gz.h"
 #endif
 
-#ifdef ESP32 
- #define fullName(x) name(x)
-#endif
+const char * fsWrapper::excludeListFile PROGMEM = "/.exclude.files";
 
-#define SPIFFS_MAXLENGTH_FILEPATH 32
-static const char excludeListFile[] PROGMEM = "/.exclude.files";
 
-typedef struct ExcludeListS {
-    char *item;
-    ExcludeListS *next;
-} ExcludeList;
-
-static ExcludeList *excludes = NULL;
-
-static bool matchWild(const char *pattern, const char *testee) {
-  const char *nxPat = NULL, *nxTst = NULL;
-
-  while (*testee) {
-    if (( *pattern == '?' ) || (*pattern == *testee)){
-      pattern++;testee++;
-      continue;
-    }
-    if (*pattern=='*'){
-      nxPat=pattern++; nxTst=testee;
-      continue;
-    }
-    if (nxPat){ 
-      pattern = nxPat+1; testee=++nxTst;
-      continue;
-    }
-    return false;
-  }
-  while (*pattern=='*'){pattern++;}  
-  return (*pattern == 0);
-}
-
-static bool addExclude(const char *item){
-    size_t len = strlen(item);
-    if(!len){
-        return false;
-    }
-    ExcludeList *e = (ExcludeList *)malloc(sizeof(ExcludeList));
-    if(!e){
-        return false;
-    }
-    e->item = (char *)malloc(len+1);
-    if(!e->item){
-        free(e);
-        return false;
-    }
-    memcpy(e->item, item, len+1);
-    e->next = excludes;
-    excludes = e;
-    return true;
-}
-
-static void loadExcludeList(fs::FS &_fs, const char *filename){
-    static char linebuf[SPIFFS_MAXLENGTH_FILEPATH];
-    fs::File excludeFile=_fs.open(filename, "r");
-    if(!excludeFile){
-        //addExclude("/*.js.gz");
-        return;
-    }
-#ifdef ESP32
-    if(excludeFile.isDirectory()){
-      excludeFile.close();
-      return;
-    }
-#endif
-    if (excludeFile.size() > 0){
-      uint8_t idx;
-      bool isOverflowed = false;
-      while (excludeFile.available()){
-        linebuf[0] = '\0';
-        idx = 0;
-        int lastChar;
-        do {
-          lastChar = excludeFile.read();
-          if(lastChar != '\r'){
-            linebuf[idx++] = (char) lastChar;
-          }
-        } while ((lastChar >= 0) && (lastChar != '\n') && (idx < SPIFFS_MAXLENGTH_FILEPATH));
-
-        if(isOverflowed){
-          isOverflowed = (lastChar != '\n');
-          continue;
-        }
-        isOverflowed = (idx >= SPIFFS_MAXLENGTH_FILEPATH);
-        linebuf[idx-1] = '\0';
-        if(!addExclude(linebuf)){
-            excludeFile.close();
-            return;
-        }
-      }
-    }
-    excludeFile.close();
-}
-
-static bool isExcluded(fs::FS &_fs, const char *filename) {
-  if(excludes == NULL){
-      loadExcludeList(_fs, String(FPSTR(excludeListFile)).c_str());
-  }
-  ExcludeList *e = excludes;
-  while(e){
-    if (matchWild(e->item, filename)){
-      return true;
-    }
-    e = e->next;
-  }
-  return false;
-}
 
 // WEB HANDLER IMPLEMENTATION
 
@@ -131,36 +22,24 @@ SPIFFSEditor::SPIFFSEditor(const String& username, const String& password, const
 ,_password(password)
 ,_authenticated(false)
 ,_startTime(0)
+,_wrapper(fs)
 {}
 
 bool SPIFFSEditor::canHandle(AsyncWebServerRequest *request){
+  File tempfile;
   if(request->url().equalsIgnoreCase(F("/edit"))){
     if(request->method() == HTTP_GET){
       if(request->hasParam(F("list")))
         return true;
       if(request->hasParam(F("edit"))){
-        request->_tempFile = _fs.open(request->arg(F("edit")), "r");
-        if(!request->_tempFile){
+        const char * filename = request->arg(F("edit")).c_str();
+        if(!_wrapper.testOpenFile(filename))
           return false;
-        }
-#ifdef ESP32
-        if(request->_tempFile.isDirectory()){
-          request->_tempFile.close();
-          return false;
-        }
-#endif
       }
       if(request->hasParam("download")){
-        request->_tempFile = _fs.open(request->arg(F("download")), "r");
-        if(!request->_tempFile){
+        const char * filename = request->arg(F("download")).c_str();
+        if(!_wrapper.testOpenFile(filename))
           return false;
-        }
-#ifdef ESP32
-        if(request->_tempFile.isDirectory()){
-          request->_tempFile.close();
-          return false;
-        }
-#endif
       }
       request->addInterestingHeader(F("If-Modified-Since"));
       return true;
@@ -171,11 +50,17 @@ bool SPIFFSEditor::canHandle(AsyncWebServerRequest *request){
       return true;
     else if(request->method() == HTTP_PUT)
       return true;
-
   }
   return false;
 }
 
+bool SPIFFSEditor::printDirFromCallback(Print * printPtr, SPIFFSEditor * pThis){
+  // TODO: go through wrappers, finding first wrapper that matches prefix, and printing prefixes on "/"
+
+  pThis->_wrapper.defaultPrintDirFunction(printPtr, pThis->_path);
+
+  return true;
+}
 
 void SPIFFSEditor::handleRequest(AsyncWebServerRequest *request){
   if(_username.length() && _password.length() && !request->authenticate(_username.c_str(), _password.c_str()))
@@ -184,51 +69,35 @@ void SPIFFSEditor::handleRequest(AsyncWebServerRequest *request){
   if(request->method() == HTTP_GET){
     if(request->hasParam(F("list"))){
       String path = request->getParam(F("list"))->value();
-#ifdef ESP32
-      File dir = _fs.open(path);
-#else
-      fs::Dir dir = _fs.openDir(path);
-#endif
-      path = String();
-      String output = "[";
-#ifdef ESP32
-      File entry = dir.openNextFile();
-      while(entry){
-#else
-      while(dir.next()){
-        fs::File entry = dir.openFile("r");
-#endif
-		String fname = entry.fullName();
-		if (fname.charAt(0) != '/') fname = "/" + fname;
-		
-        if (isExcluded(_fs, fname.c_str())) {
-#ifdef ESP32
-            entry = dir.openNextFile();
-#endif
-            continue;
+      _path = request->getParam(F("list"))->value();
+
+      AsyncWebServerResponse *response = request->beginStreamRepeaterResponse("application/json", [](Print *printPtr, size_t index, bool final, void *pThis) -> bool {
+
+        if(!index) {
+          //Serial.println("first callback");
         }
-        if (output != "[") output += ',';
-        output += F("{\"type\":\"");
-        output += F("file");
-        output += F("\",\"name\":\"");
-        output += String(fname);
-        output += F("\",\"size\":");
-        output += String(entry.size());
-        output += "}";
-#ifdef ESP32
-        entry = dir.openNextFile();
-#else
-        entry.close();
-#endif
-      }
-#ifdef ESP32
-      dir.close();
-#endif
-      output += "]";
-      request->send(200, F("application/json"), output);
-      output = String();
+
+        // call on disconnect
+        if(final) {
+          //Serial.println("final");
+          return 1;  // return value of "done sending"
+        }
+
+        // each time this is called, we print the entire response, but AsyncChunkedStreamResponse knows to ignore what has already been sent, and fills in just what is new until the buffer is full
+        printPtr->print("[");
+        printDirFromCallback(printPtr, (SPIFFSEditor*)pThis);
+        printPtr->print("]");
+
+        return 1;  // return value of "done sending"
+      }, this);
+      request->send(response);
     }
     else if(request->hasParam(F("edit")) || request->hasParam(F("download"))){
+      if(request->hasParam(F("edit")))
+        request->_tempFile = _fs.open(request->arg(F("edit")), "r");
+      if(request->hasParam("download"))
+        request->_tempFile = _fs.open(request->arg(F("download")), "r");
+
       request->send(request->_tempFile, request->_tempFile.fullName(), String(), request->hasParam(F("download")));
     }
     else {
