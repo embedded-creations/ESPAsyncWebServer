@@ -22,8 +22,92 @@ SPIFFSEditor::SPIFFSEditor(const String& username, const String& password, const
 ,_password(password)
 ,_authenticated(false)
 ,_startTime(0)
-,_wrapper(fs)
-{}
+{
+  // clear all wrappers, then assign arguments to the first one only
+  memset(_wrappers, 0x00, sizeof(fsWrapper*) * MAX_NUM_FILESYSTEMS);
+  _wrappers[0] = new fsWrapper(fs, fsPrefix);
+}
+
+fsWrapper * SPIFFSEditor::getWrapperFromPath(const String& path) {
+  // go through wrappers, looking for matching fsPrefix
+  //Serial.print("getWrapperFromPath(");
+  //Serial.print(path);
+  //Serial.print("): ");
+
+  for(int i=0; i<MAX_NUM_FILESYSTEMS; i++){
+    if(!_wrappers[i])
+      continue;
+
+    String fsPrefix = _wrappers[i]->getFsPrefix();
+    String pathPrefix = path.substring(0,fsPrefix.length());
+    if(pathPrefix.equalsIgnoreCase(fsPrefix)) {
+      Serial.print("== ");
+      Serial.println(fsPrefix);
+      return _wrappers[i];
+    }
+
+    Serial.print("!= ");
+    Serial.println(fsPrefix);
+  }
+  return NULL;
+}
+
+fs::FS * SPIFFSEditor::getFsFromPath(const String& path){
+  fsWrapper * wrapper = getWrapperFromPath(path);
+  if(wrapper)
+    return wrapper->getFs();
+  return NULL;
+}
+
+String SPIFFSEditor::removePrefixFromPath(const String& path){
+  fsWrapper * wrapper = getWrapperFromPath(path);
+  if(!wrapper) return String();
+
+  String shortpath = path;
+  // remove prefix from path
+  shortpath.remove(0, wrapper->getFsPrefix().length());
+  if (shortpath.charAt(0) != '/') shortpath = "/" + shortpath;
+  return shortpath;
+}
+
+File SPIFFSEditor::open(const String& path, const char* mode){
+  fs::FS * fsPtr = getFsFromPath(path);
+  if(!fsPtr)
+    return File();
+
+  //Serial.print("removePrefixFromPath(");
+  //Serial.print(path);
+  //Serial.print("): ");
+  //Serial.println(removePrefixFromPath(path));
+
+  return fsPtr->open(removePrefixFromPath(path), mode);
+}
+
+void SPIFFSEditor::addFs(fs::FS& fs, const String& fsPrefix, PrintDirFunction altListDirFunction){
+  for(int i=0; i<MAX_NUM_FILESYSTEMS; i++){
+    if(_wrappers[i])
+      continue;
+
+    _wrappers[i] = new fsWrapper(fs, fsPrefix);
+    break;
+  }
+}
+
+bool SPIFFSEditor::testOpenFile(const char * filename) {
+  File tempfile;
+  tempfile = open(filename, "r");
+  if(!tempfile){
+    return false;
+  }
+#ifdef ESP32
+  if(tempfile.isDirectory()){
+    tempfile.close();
+    return false;
+  }
+#endif
+  tempfile.close();
+  return true;
+}
 
 bool SPIFFSEditor::canHandle(AsyncWebServerRequest *request){
   File tempfile;
@@ -32,13 +116,11 @@ bool SPIFFSEditor::canHandle(AsyncWebServerRequest *request){
       if(request->hasParam(F("list")))
         return true;
       if(request->hasParam(F("edit"))){
-        const char * filename = request->arg(F("edit")).c_str();
-        if(!_wrapper.testOpenFile(filename))
+        if(!testOpenFile(request->arg(F("edit")).c_str()))
           return false;
       }
       if(request->hasParam("download")){
-        const char * filename = request->arg(F("download")).c_str();
-        if(!_wrapper.testOpenFile(filename))
+        if(!testOpenFile(request->arg(F("download")).c_str()))
           return false;
       }
       request->addInterestingHeader(F("If-Modified-Since"));
@@ -56,8 +138,33 @@ bool SPIFFSEditor::canHandle(AsyncWebServerRequest *request){
 
 bool SPIFFSEditor::printDirFromCallback(Print * printPtr, SPIFFSEditor * pThis){
   // TODO: go through wrappers, finding first wrapper that matches prefix, and printing prefixes on "/"
+  fsWrapper * wrapper = pThis->getWrapperFromPath(pThis->_path);  
 
-  pThis->_wrapper.defaultPrintDirFunction(printPtr, pThis->_path);
+  if(!wrapper) {
+    // print list of wrapper paths when requesting root directory
+    if(pThis->_path.equals("/")) {
+      bool firstEntry = true;
+      for(int i=0; i<MAX_NUM_FILESYSTEMS; i++) {
+        fsWrapper * wrapper = pThis->_wrappers[i];
+        if(!wrapper)
+          continue;
+
+        if(firstEntry)
+          firstEntry = false;
+        else
+          printPtr->print(',');
+        printPtr->print(F("{\"type\":\""));
+        printPtr->print(F("file"));
+        printPtr->print(F("\",\"name\":\""));
+        printPtr->print(wrapper->getFsPrefix());
+        printPtr->print(F("\",\"size\":0"));
+        printPtr->print("}");
+      }
+    }
+    return true;
+  }
+
+  wrapper->printDir(printPtr, pThis->_path);
 
   return true;
 }
@@ -93,10 +200,12 @@ void SPIFFSEditor::handleRequest(AsyncWebServerRequest *request){
       request->send(response);
     }
     else if(request->hasParam(F("edit")) || request->hasParam(F("download"))){
-      if(request->hasParam(F("edit")))
-        request->_tempFile = _fs.open(request->arg(F("edit")), "r");
-      if(request->hasParam("download"))
-        request->_tempFile = _fs.open(request->arg(F("download")), "r");
+      if(request->hasParam(F("edit"))){
+        request->_tempFile = open(request->arg(F("edit")), "r");
+      }
+      if(request->hasParam("download")){
+        request->_tempFile = open(request->arg(F("download")), "r");
+      }
 
       request->send(request->_tempFile, request->_tempFile.fullName(), String(), request->hasParam(F("download")));
     }
