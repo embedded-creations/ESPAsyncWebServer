@@ -59,9 +59,6 @@ class FsWrapperSFE : public FsWrapper {
       bool firstEntry = true;
       // TODO: double check that path starts with fsPrefix?
 
-      // remove prefix from path
-      path.remove(0, _fsPrefix.length());
-      if (path.charAt(0) != '/') path = "/" + path;
 
 #ifdef ESP32
       File dir = _fs.open(path);
