@@ -6,6 +6,126 @@
  #include "edit.htm.gz.h"
 #endif
 
+#define LIST_RESPONSE_MAX_DURATION_PER_LOOP_MS  1000
+#define SPIFFS_MAXLENGTH_FILEPATH 32
+static const char excludeListFile[] PROGMEM = "/.exclude.files";
+
+typedef struct ExcludeListS {
+    char *item;
+    ExcludeListS *next;
+} ExcludeList;
+
+static ExcludeList *excludes = NULL;
+
+static bool matchWild(const char *pattern, const char *testee) {
+  const char *nxPat = NULL, *nxTst = NULL;
+
+  while (*testee) {
+    if (( *pattern == '?' ) || (*pattern == *testee)){
+      pattern++;testee++;
+      continue;
+    }
+    if (*pattern=='*'){
+      nxPat=pattern++; nxTst=testee;
+      continue;
+    }
+    if (nxPat){ 
+      pattern = nxPat+1; testee=++nxTst;
+      continue;
+    }
+    return false;
+  }
+  while (*pattern=='*'){pattern++;}  
+  return (*pattern == 0);
+}
+
+static bool addExclude(const char *item){
+    size_t len = strlen(item);
+    if(!len){
+        return false;
+    }
+    ExcludeList *e = (ExcludeList *)malloc(sizeof(ExcludeList));
+    if(!e){
+        return false;
+    }
+    e->item = (char *)malloc(len+1);
+    if(!e->item){
+        free(e);
+        return false;
+    }
+    memcpy(e->item, item, len+1);
+    e->next = excludes;
+    excludes = e;
+    return true;
+}
+
+static void freeExcludeList() {
+  ExcludeList * temp;
+
+  while(excludes) {
+    temp = excludes;
+    excludes = excludes->next;
+    free(temp);
+  }
+}
+
+static void loadExcludeList(fs::FS &_fs, const char *filename){
+    static char linebuf[SPIFFS_MAXLENGTH_FILEPATH];
+    if(excludes != NULL)
+      freeExcludeList();
+    fs::File excludeFile=_fs.open(filename, "r");
+    if(!excludeFile){
+        //addExclude("/*.js.gz");
+        return;
+    }
+#ifdef ESP32
+    if(excludeFile.isDirectory()){
+      excludeFile.close();
+      return;
+    }
+#endif
+    if (excludeFile.size() > 0){
+      uint8_t idx;
+      bool isOverflowed = false;
+      while (excludeFile.available()){
+        linebuf[0] = '\0';
+        idx = 0;
+        int lastChar;
+        do {
+          lastChar = excludeFile.read();
+          if(lastChar != '\r'){
+            linebuf[idx++] = (char) lastChar;
+          }
+        } while ((lastChar >= 0) && (lastChar != '\n') && (idx < SPIFFS_MAXLENGTH_FILEPATH));
+        if(isOverflowed){
+          isOverflowed = (lastChar != '\n');
+          continue;
+        }
+        isOverflowed = (idx >= SPIFFS_MAXLENGTH_FILEPATH);
+        linebuf[idx-1] = '\0';
+        if(!addExclude(linebuf)){
+            excludeFile.close();
+            return;
+        }
+      }
+    }
+    excludeFile.close();
+}
+
+static bool isExcluded(const char *filename) {
+  if(excludes == NULL){
+      return false;
+  }
+  ExcludeList *e = excludes;
+  while(e){
+    if (matchWild(e->item, filename)){
+      return true;
+    }
+    e = e->next;
+  }
+  return false;
+}
+
 // WEB HANDLER IMPLEMENTATION
 
 #ifdef ESP32
@@ -69,31 +189,6 @@ bool SPIFFSEditor::canHandle(AsyncWebServerRequest *request){
   return false;
 }
 
-// printDirFromCallback always returns true, indicating it's done printing to printPtr
-bool SPIFFSEditor::printDirFromCallback(Print * printPtr, SPIFFSEditor * pThis){
-  if(pThis->_path.equals("/")) {
-    bool firstEntry = true;
-    for(int i=0; i<MAX_NUM_FILESYSTEMS; i++) {
-      String prefix = pThis->_fs.getFsPrefixByIndex(i);
-      if(!prefix.length())
-        continue;
-
-      if(firstEntry)
-        firstEntry = false;
-      else
-        printPtr->print(',');
-      printPtr->print(F("{\"type\":\""));
-      printPtr->print(F("file"));
-      printPtr->print(F("\",\"name\":\""));
-      printPtr->print(prefix);
-      printPtr->print(F("\",\"size\":0"));
-      printPtr->print("}");
-    }
-    return true;
-  }
-
-  return pThis->_fs.printDir(printPtr, pThis->_path);
-}
 
 void SPIFFSEditor::handleRequest(AsyncWebServerRequest *request){
   if(_username.length() && _password.length() && !request->authenticate(_username.c_str(), _password.c_str()))
@@ -101,27 +196,122 @@ void SPIFFSEditor::handleRequest(AsyncWebServerRequest *request){
 
   if(request->method() == HTTP_GET){
     if(request->hasParam(F("list"))){
-      String path = request->getParam(F("list"))->value();
       _path = request->getParam(F("list"))->value();
 
-      AsyncWebServerResponse *response = request->beginStreamRepeaterResponse("application/json", [](Print *printPtr, size_t index, bool final, void *pThis) -> bool {
+      AsyncWebServerResponse *response = request->beginChunkedStreamResponse("application/json", [](Print *printPtr, size_t index, bool final, void *pThis) -> bool {
+        static bool firstEntry;
+        static bool donePrinting;
 
-        if(!index) {
-          //Serial.println("first callback");
-        }
+        String& path = ((SPIFFSEditor*)pThis)->_path;
+        MultiFs& fs = ((SPIFFSEditor*)pThis)->_fs;
+        uint32_t startTime = millis();
+
+        #ifdef ESP32
+          static File dir;
+          static File entry;
+        #else
+          static fs::Dir dir;
+          static fs::File entry;
+        #endif
 
         // call on disconnect
         if(final) {
-          //Serial.println("final");
+          freeExcludeList();
+          dir.close();
+          entry.close();
           return 1;  // return value of "done sending"
         }
 
-        // each time this is called, we print the entire response, but AsyncChunkedStreamResponse knows to ignore what has already been sent, and fills in just what is new until the buffer is full
-        printPtr->print("[");
-        printDirFromCallback(printPtr, (SPIFFSEditor*)pThis);
-        printPtr->print("]");
+        // index==0 on a new request
+        if(!index) {
+          donePrinting = false;
+          printPtr->print("[");
 
-        return 1;  // return value of "done sending"
+          if(path.equals("/")) {
+            firstEntry = true;
+            for(int i=0; i<MAX_NUM_FILESYSTEMS; i++) {
+              String prefix = fs.getFsPrefixByIndex(i);
+              if(!prefix.length())
+                continue;
+
+              if(firstEntry)
+                firstEntry = false;
+              else
+                printPtr->print(',');
+              printPtr->print(F("{\"type\":\""));
+              printPtr->print(F("file"));
+              printPtr->print(F("\",\"name\":\""));
+              printPtr->print(prefix);
+              printPtr->print(F("\",\"size\":0"));
+              printPtr->print("}");
+            }
+          } else {
+            loadExcludeList(*fs.getFsFromPath(path), String(FPSTR(excludeListFile)).c_str());
+
+            firstEntry = true;
+            fs.open(path);
+            #ifdef ESP32
+              dir = fs.open(path);
+              entry = dir.openNextFile();
+            #else
+              dir = fs.openDir(path);
+              dir.next();
+              entry = dir.openFile("r");
+            #endif
+          }
+        }
+
+        while(entry && (printPtr->availableForWrite() > 255) && (millis() - startTime < LIST_RESPONSE_MAX_DURATION_PER_LOOP_MS)) {
+          String fname = entry.fullName(); // this won't have MultiFs prefix
+          if (fname.charAt(0) != '/') fname = "/" + fname;
+
+          // check for excluded files before adding MultiFs prefix
+          if (isExcluded(fname.c_str())) {
+            #ifdef ESP32
+              entry = dir.openNextFile();
+            #else
+              dir.next();
+              entry = dir.openFile("r");
+            #endif
+
+            continue;
+          }
+
+          fname = fs.getFsPrefixFromPath(path) + fname; // add MultiFs Prefix
+
+          if(firstEntry)
+            firstEntry = false;
+          else
+            printPtr->print(',');
+          printPtr->print(F("{\"type\":\""));
+          printPtr->print(F("file"));
+          printPtr->print(F("\",\"name\":\""));
+          printPtr->print(String(fname));
+          printPtr->print(F("\",\"size\":"));
+          printPtr->print(String(entry.size()));
+          printPtr->print("}");
+          #ifdef ESP32
+            entry.close();
+            entry = dir.openNextFile();
+          #else
+            entry.close();
+            dir.next();
+            entry = dir.openFile("r");
+          #endif
+        }
+
+        if(entry) {
+          return 0; // return value of "not done sending", we'll print this entry next pass
+        } 
+
+        // we may end up here multiple times after !entry, make sure the closing bracket is only printed once
+        if(!donePrinting) {
+          donePrinting = true;
+          printPtr->print("]"); 
+          dir.close();
+        }
+
+        return 1; // return value of "done sending"
       }, this);
       request->send(response);
     }
