@@ -19,23 +19,23 @@ class FsWrapper {
     fs::FS * getFs() { return &_fs; }
 
     // the below methods are identical to fs::FS class, so FsWrapper can be used just like FS (inheriting from FS is complicated on ESP8266/ESP32)
-    //File open(const char* path, const char* mode = FILE_READ);
+    virtual File open(const char* path, const char* mode = FILE_READ) { return _fs.open(path, mode); }
     virtual File open(const String& path, const char* mode = FILE_READ) { return _fs.open(path, mode); }
 
-    //virtual bool exists(const char* path) { return false; }
-    //virtual bool exists(const String& path) { return false; }
+    virtual bool exists(const char* path) { return _fs.exists(path); }
+    virtual bool exists(const String& path) { return _fs.exists(path); }
 
-    //virtual bool remove(const char* path) { return false; }
-    //virtual bool remove(const String& path) { return false; }
+    virtual bool remove(const char* path) { return _fs.remove(path); }
+    virtual bool remove(const String& path) { return _fs.remove(path); }
 
-    //virtual bool rename(const char* pathFrom, const char* pathTo) { return false; }
-    //virtual bool rename(const String& pathFrom, const String& pathTo) { return false; }
+    virtual bool rename(const char* pathFrom, const char* pathTo) { return _fs.rename(pathFrom, pathTo); }
+    virtual bool rename(const String& pathFrom, const String& pathTo) { return _fs.rename(pathFrom, pathTo); }
 
-    //virtual bool mkdir(const char *path) { return false; }
-    //virtual bool mkdir(const String &path) { return false; }
+    virtual bool mkdir(const char *path) { return _fs.mkdir(path); }
+    virtual bool mkdir(const String &path) { return _fs.mkdir(path); }
 
-    //virtual bool rmdir(const char *path) { return false; }
-    //virtual bool rmdir(const String &path) { return false; }
+    virtual bool rmdir(const char *path) { return _fs.rmdir(path); }
+    virtual bool rmdir(const String &path) { return _fs.rmdir(path); }
 
   protected:
     fs::FS _fs;
@@ -110,9 +110,7 @@ class MultiFs {
     }
 
     // the below methods are identical to fs::FS class, so MultiFs can be used just like FS (inheriting from FS is complicated on ESP8266/ESP32)
-    //File open(const char* path, const char* mode = FILE_READ);
-
-    File open(const String& path, const char* mode = FILE_READ) {
+    File open(const char* path, const char* mode = FILE_READ) {
       FsWrapper * wrapper = getWrapperFromPath(path);
       if(!wrapper)
         return File();
@@ -124,21 +122,49 @@ class MultiFs {
 
       return wrapper->open(removePrefixFromPath(path), mode);
     }
+    File open(const String& path, const char* mode = FILE_READ) { return open(path.c_str(), mode); }
 
-    virtual bool exists(const char* path) { return false; }
-    virtual bool exists(const String& path) { return false; }
+    virtual bool exists(const char* path) { 
+      FsWrapper * wrapper = getWrapperFromPath(path);
+      if(!wrapper)
+        return false;
 
-    virtual bool remove(const char* path) { return false; }
-    virtual bool remove(const String& path) { return false; }
+      return wrapper->exists(removePrefixFromPath(path));
+    }
+    virtual bool exists(const String& path) { return exists(path.c_str()); }
 
-    virtual bool rename(const char* pathFrom, const char* pathTo) { return false; }
-    virtual bool rename(const String& pathFrom, const String& pathTo) { return false; }
+    virtual bool remove(const char* path) {
+      FsWrapper * wrapper = getWrapperFromPath(path);
+      if(!wrapper)
+        return false;
+      return wrapper->remove(removePrefixFromPath(path));
+    }
+    virtual bool remove(const String& path) { return remove(path.c_str()); }
 
-    virtual bool mkdir(const char *path) { return false; }
-    virtual bool mkdir(const String &path) { return false; }
+    virtual bool rename(const char* pathFrom, const char* pathTo) { 
+      // TODO: check pathFrom and pathTo use the same wrapper?
+      FsWrapper * wrapper = getWrapperFromPath(pathFrom);
+      if(!wrapper)
+        return false;
+      return wrapper->rename(removePrefixFromPath(pathFrom), removePrefixFromPath(pathTo));
+    }
+    virtual bool rename(const String& pathFrom, const String& pathTo) { return rename(pathFrom.c_str(), pathTo.c_str()); }
 
-    virtual bool rmdir(const char *path) { return false; }
-    virtual bool rmdir(const String &path) { return false; }
+    virtual bool mkdir(const char *path) {
+      FsWrapper * wrapper = getWrapperFromPath(path);
+      if(!wrapper)
+        return false;
+      return wrapper->mkdir(removePrefixFromPath(path));
+    }
+    virtual bool mkdir(const String &path) { return mkdir(path.c_str()); }
+
+    virtual bool rmdir(const char *path) {
+      FsWrapper * wrapper = getWrapperFromPath(path);
+      if(!wrapper)
+        return false;
+      return wrapper->rmdir(removePrefixFromPath(path));
+    }
+    virtual bool rmdir(const String &path) { return rmdir(path.c_str()); }
 
   protected:
     int getWrapperIndexFromPath(const String& path) {
