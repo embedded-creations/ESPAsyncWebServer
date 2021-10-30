@@ -4,6 +4,16 @@
 //#define USE_LittleFS
 //#define USE_FatFS // Only ESP32
 
+#ifdef USE_SD
+  #include <SPI.h>
+  #include <SD.h>
+
+  #define SD_CS     -1 // SD_CS is optional, set to -1 if not using CS
+  #define SD_SCK    23
+  #define SD_MOSI   19
+  #define SD_MISO   33
+#endif
+
 #include <ArduinoOTA.h>
 #ifdef ESP32
  #include <FS.h>
@@ -176,17 +186,38 @@ void setup(){
   });
   server.addHandler(&events);
 
+#ifdef USE_SD
+  SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  if(!SD.begin(SD_CS, SPI, 10000000)) {
+    Serial.println("SDCard Init Error");
+  }else{
+    Serial.println("SDCard Started");
+  }
+#endif
+
 #ifdef ESP32
-  server.addHandler(new SPIFFSEditor(MYFS, http_username,http_password));
+  SPIFFSEditor * spiffsEditorHandler = new SPIFFSEditor(MYFS, http_username,http_password, "/myfs");
 #elif defined(ESP8266)
-  server.addHandler(new SPIFFSEditor(http_username,http_password, MYFS));
+  SPIFFSEditor * spiffsEditorHandler = new SPIFFSEditor(http_username,http_password, MYFS, "/myfs");
+#endif
+  server.addHandler(spiffsEditorHandler);
+
+#ifdef USE_SD
+  spiffsEditorHandler->addFs(SD, "/SD");
+  server.serveStatic("/SD", SD, "/");
 #endif
   
   server.on("/heap", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(200, "text/plain", String(ESP.getFreeHeap()));
   });
 
-  server.serveStatic("/", MYFS, "/").setDefaultFile("index.htm");
+  server.serveStatic("/myfs", MYFS, "/");
+  server.serveStatic("/", MYFS, "/"); // this is needed because edit.htm depends on ace, etc being served from "/"
+
+  // this more verbose method (compared to setDefaultFile()) serves index.htm even when there's no filesystem served from "/"
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(MYFS, "/index.htm", "text/html");
+  });
 
   server.onNotFound([](AsyncWebServerRequest *request){
     Serial.printf("NOT_FOUND: ");
