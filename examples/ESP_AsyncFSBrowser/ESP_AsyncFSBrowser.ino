@@ -3,6 +3,7 @@
 
 //#define USE_LittleFS
 //#define USE_FatFS // Only ESP32
+//#define USE_SD
 
 #ifdef USE_SD
   #include <SPI.h>
